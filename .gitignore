@@ -1,0 +1,28 @@
+# venv
+.venv/
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+
+data/raw/*.csv
+data/processed/*.csv
+reports/*
+
+# trained models (regenerated from data, not source-controlled)
+models/*.joblib
+
+# OS
+.DS_Store
+
+
+CLAUDE.md
+notes/
+
+
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!models/.gitkeep
+!reports/.gitkeep
