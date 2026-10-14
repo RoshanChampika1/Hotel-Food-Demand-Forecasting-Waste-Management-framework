@@ -198,6 +198,7 @@ python src/attendance_models.py data/processed/events_clean.csv results/attendan
 - Leave-one-event-out comparison of the chef's rule, average and median ratio, linear and Ridge regression, random forest, gradient boosting, and P85 safe methods (quantile regression, conformal margin, quantile GBM)
 - A waste vs running-short trade-off curve, a train-on-past / test-on-future check, and a road-distance feature test
 - Findings, in plain English: [results/attendance/RESULTS.md](results/attendance/RESULTS.md)
+- Step-by-step VS Code guide: [docs/RUN_IN_VSCODE.md](docs/RUN_IN_VSCODE.md)
 - Data dictionary: [docs/event_order_data.md](docs/event_order_data.md); project plan and viva preparation: [docs/plan/](docs/plan/)
 
 Only aggregate results are committed. Event-level data stays private, in line with the policy below.
