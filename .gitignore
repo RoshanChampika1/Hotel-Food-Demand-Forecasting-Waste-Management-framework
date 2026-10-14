@@ -28,3 +28,4 @@ notes/
 !data/processed/.gitkeep
 !models/.gitkeep
 !reports/.gitkeep
+results/attendance/per_event_predictions.csv

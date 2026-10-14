@@ -10,7 +10,7 @@ Script: `src/attendance_models.py`. Numbers: `results/attendance/results_loeo.cs
 
 1. **Attendance is close to booked, but it varies.** On average 99% of booked guests came; the middle 80% of events fall between 0.93 and 1.08 of booked. Fewer guests came in 37 events and more came in 11.
 2. **The chef's rule (cook for booked) is already a sensible "safe" rule.** It gave enough food in **80% of events** (it ran short in 11 of 54). It behaves like a **P80 safe quantity**, close to the P85 we planned.
-3. **The booking details do not predict attendance.** Booked size, day or night, weekend, menu size, month, event type and distance from the client's town are all only weakly related to attendance (correlation at most 0.16). Ridge, random forest and gradient boosting are **no better than a simple average**. This is an honest and normal small-data result.
+3. **The booking details do not predict attendance.** Booked size, day or night, weekend, menu size, month, event type and distance from the client's town are all only weakly related to attendance (correlation at most 0.16). Ridge, random forest, gradient boosting and XGBoost are **no better than a simple average**. This is an honest and normal small-data result.
 4. **So the real decision is a trade-off between waste and running short.** Cooking for fewer guests cuts waste but makes food run short more often. The models make this trade-off **visible and measurable**, which the chef's single rule cannot do.
 
 ---
@@ -27,18 +27,20 @@ Leftover = (guests cooked for − guests who came) × 0.5 / 0.6 / 0.65 kg by men
 | Median past ratio (0.97 × booked) | 9.8 | 91 (51–138) | 100,400 | 26 | 52% |
 | Linear regression | 12.1 | 200 | 220,100 | 20 | 63% |
 | Ridge regression | 11.6 | 196 | 216,700 | 19 | 65% |
-| Random forest (shallow) | 11.8 | 198 | 218,100 | 19 | 65% |
+| Random forest (shallow) | 11.8 | 198 | 218,000 | 18 | 67% |
 | Gradient boosting (shallow) | 13.0 | 235 | 258,600 | 20 | 63% |
+| XGBoost (shallow) | 12.9 | 226 | 248,800 | 18 | 67% |
 | Safe P85: past-ratio percentile | 20.2 | 564 | 621,700 | 9 | 83% |
 | **Safe P85: quantile regression** | 15.1 | 398 | 440,400 | **8** | **85%** |
 | Safe P85: Ridge + conformal margin | 19.4 | 556 | 612,800 | 8 | 85% |
-| Safe P85: quantile GBM | 18.2 | 502 | 554,600 | 10 | 81% |
+| Safe P85: quantile GBM | 18.1 | 502 | 554,400 | 10 | 81% |
+| Safe P85: XGBoost quantile | 18.4 | 503 | 556,500 | 8 | 85% |
 
 What the table shows:
 - **Expected-value models** (average, Ridge, random forest) cut leftover by about **50 kg (about 20%)**, but food runs short more often (16–20 events instead of 11).
 - **The median rule** cuts leftover by **63%** (157 kg), but food runs short in about **half** of events.
 - **P85 safe models** hit their target (81–85% of events had enough food), but they cook for *more* guests than booked, so leftover rises. **Quantile regression has the best P85 accuracy** (lowest pinball loss: 4.41, against 4.77 for the chef rule).
-- **Complex models do not help.** Gradient boosting is the worst expected-value model. That is evidence for choosing simple methods with small data.
+- **Complex models do not help.** Gradient boosting and XGBoost are the worst expected-value models, and XGBoost quantile (pinball 4.97) is less accurate than plain quantile regression (4.41). That is evidence for choosing simple methods with small data.
 
 ---
 
@@ -66,10 +68,11 @@ Trained on the first 32 events (up to 23 July 2026) and tested on the last 22:
 
 | Method | Leftover kg | Events short |
 |---|---|---|
-| Chef rule | 80 | 6 |
-| Average ratio | 44 | 11 |
+| Chef rule | 77 | 6 |
+| Average ratio | 41 | 12 |
 | Ridge | 48 | 10 |
-| P85 quantile regression | 118 | 5 |
+| P85 quantile regression | 116 | 5 |
+| XGBoost | 73 | 10 |
 
 The pattern is the same as in the main results: simple methods cut waste, but food runs short more often, and the safe models cut shortfalls but cost more waste. So the conclusions do not depend on how the data was split.
 

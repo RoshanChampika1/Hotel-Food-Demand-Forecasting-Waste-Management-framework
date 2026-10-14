@@ -18,6 +18,7 @@ from sklearn.linear_model import Ridge, LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
+from xgboost import XGBRegressor
 import statsmodels.api as sm
 
 warnings.filterwarnings("ignore")
@@ -29,7 +30,7 @@ FEATURES = ["log_booked", "night", "weekend", "n_dishes_total", "month_sin", "mo
 
 def load(path):
     d = pd.read_csv(path)
-    d = d[d.usable == 1].copy().sort_values("date").reset_index(drop=True)
+    d = d[d.usable == 1].copy().sort_values(["date", "event_id"], kind="stable").reset_index(drop=True)
     d["log_booked"] = np.log(d.pax_booked)
     d["night"] = (d.session == "night").astype(int)
     d["wedding"] = (d.event_type == "wedding").astype(int)
@@ -82,6 +83,16 @@ def gbm_q(q):
                                              learning_rate=0.05, min_samples_leaf=5, random_state=0)
 
 
+def xgb():
+    return XGBRegressor(n_estimators=100, max_depth=2, learning_rate=0.05, min_child_weight=5,
+                        subsample=0.8, reg_lambda=1.0, random_state=0, n_jobs=1)
+
+
+def xgb_q(q):
+    return lambda: XGBRegressor(objective="reg:quantileerror", quantile_alpha=q, n_estimators=100, max_depth=2,
+                                learning_rate=0.05, min_child_weight=5, subsample=0.8, random_state=0, n_jobs=1)
+
+
 QR_FEATURES = ["log_booked", "weekend", "month_sin", "month_cos", "road_km"]  # fewer features: quantile regression is unstable at small n
 
 
@@ -119,11 +130,13 @@ METHODS = {
     "Ridge regression": ("expected", sk_model(ridge)),
     "Random forest (shallow)": ("expected", sk_model(rf)),
     "Gradient boosting (shallow)": ("expected", sk_model(gbm)),
+    "XGBoost (shallow)": ("expected", sk_model(xgb)),
     # safe (85%) methods
     "Safe: 85th percentile of past ratios": ("safe", emp_quantile(Q)),
     "Safe: quantile regression P85": ("safe", quant_reg(Q)),
     "Safe: Ridge + conformal margin P85": ("safe", conformal(sk_model(ridge), Q)),
     "Safe: quantile GBM P85": ("safe", sk_model(gbm_q(Q))),
+    "Safe: XGBoost quantile P85": ("safe", sk_model(xgb_q(Q))),
 }
 
 
