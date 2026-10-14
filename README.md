@@ -85,7 +85,8 @@ and are not being presented as research findings until run on real data.
 | Single-event prediction                                              | Done                                                                                                   |
 | Streamlit input/output interface                                     | Done                                                                                                   |
 | Real-data preprocessing (raw hotel CSVs → training-ready data)       | Pending — schema is finalized (see data collection template below); build starts once real CSVs arrive |
-| Real hotel data collection                                           | In progress                                                                                            |
+| Real hotel data collection                                           | Done for own hotel: 69 event orders (Aug 2025–Oct 2026), 54 with actual guest counts                    |
+| Real-data attendance analysis (`src/event_orders/`, `src/attendance_models.py`) | Done: see [results/attendance/RESULTS.md](results/attendance/RESULTS.md)                    |
 | Thesis write-up                                                      | Not started                                                                                            |
 
 ## Methodology
@@ -181,6 +182,25 @@ python src/train.py --data data/processed/master.csv    # retrains on real data
 
 The app picks up newly trained models automatically — no code changes
 needed.
+
+## Real-Data Analysis (October 2026)
+
+Real data came from the hotel's own **event-order workbooks** (menu, booked guests, actual guest count, chef's planned raw materials), not from the per-category leftover template. They do not record leftover per food category, so the analysis models what drives waste in practice: **the gap between booked and actual guests**. The chef cooks for the booked count, each missing guest leaves about 0.5–0.65 kg of food, and extra guests make food run short until the kitchen re-cooks.
+
+```bash
+# Put the private event-order .xlsx files in data/raw/ (git-ignored), and the
+# town distance file in data/inputs/town_distance.csv (git-ignored), then:
+python src/event_orders/extract_events.py data/raw data/processed
+python src/event_orders/build_dataset.py data/raw data/processed
+python src/attendance_models.py data/processed/events_clean.csv results/attendance
+```
+
+- Leave-one-event-out comparison of the chef's rule, average and median ratio, linear and Ridge regression, random forest, gradient boosting, and P85 safe methods (quantile regression, conformal margin, quantile GBM)
+- A waste vs running-short trade-off curve, a train-on-past / test-on-future check, and a road-distance feature test
+- Findings, in plain English: [results/attendance/RESULTS.md](results/attendance/RESULTS.md)
+- Data dictionary: [docs/event_order_data.md](docs/event_order_data.md); project plan and viva preparation: [docs/plan/](docs/plan/)
+
+Only aggregate results are committed. Event-level data stays private, in line with the policy below.
 
 ## Running It for Hotel Staff (Not Just Local Dev)
 
