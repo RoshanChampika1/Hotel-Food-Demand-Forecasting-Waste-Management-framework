@@ -29,3 +29,7 @@ notes/
 !models/.gitkeep
 !reports/.gitkeep
 results/attendance/per_event_predictions.csv
+
+# event-order system: hotel recipes/menus and saved orders stay private
+data/master/
+data/orders/

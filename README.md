@@ -87,6 +87,7 @@ and are not being presented as research findings until run on real data.
 | Real-data preprocessing (raw hotel CSVs → training-ready data)       | Pending — schema is finalized (see data collection template below); build starts once real CSVs arrive |
 | Real hotel data collection                                           | Done for own hotel: 69 event orders (Aug 2025–Oct 2026), 54 with actual guest counts                    |
 | Real-data attendance analysis (`src/event_orders/`, `src/attendance_models.py`) | Done: see [results/attendance/RESULTS.md](results/attendance/RESULTS.md)                    |
+| Event Order System app (`src/event_system/`, `app/streamlit_app.py`)  | Done: Party Menu → safe guest count → Stock Balance → printable PDFs/Excel ([docs/event_order_system.md](docs/event_order_system.md)) |
 | Thesis write-up                                                      | Not started                                                                                            |
 
 ## Methodology
@@ -202,6 +203,22 @@ python src/attendance_models.py data/processed/events_clean.csv results/attendan
 - Data dictionary: [docs/event_order_data.md](docs/event_order_data.md); project plan and viva preparation: [docs/plan/](docs/plan/)
 
 Only aggregate results are committed. Event-level data stays private, in line with the policy below.
+
+## Event Order System (the app)
+
+The app replaces the manual Excel event order. Staff enter the event (date, day/night, hall, type,
+serving time, booked pax, customer town), choose dishes for the Party Menu, and get the Stock Balance
+(Fresh, Dry and Meat items) and kitchen recipes. The number of guests to cook for comes from the
+attendance model at a chosen safety level. The Party Menu, Stock Balance and kitchen recipes download
+as separate PDFs, or together as one Excel file.
+
+```bash
+python src/event_system/build_master_data.py data/raw data/master      # recipe book, dishes, items (private)
+python src/event_system/train_attendance.py                              # guest-count model
+streamlit run app/streamlit_app.py
+```
+
+Design and checks: [docs/event_order_system.md](docs/event_order_system.md).
 
 ## Running It for Hotel Staff (Not Just Local Dev)
 
