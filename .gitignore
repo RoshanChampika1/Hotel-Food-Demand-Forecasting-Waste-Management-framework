@@ -8,6 +8,8 @@ __pycache__/
 
 
 data/raw/*.csv
+data/raw/*.xlsx
+data/inputs/*.csv
 data/processed/*.csv
 reports/*
 
