@@ -1,98 +1,120 @@
-"""
-Merge raw hotel CSVs (data/raw/*.csv) into one clean master dataset.
+"""Clean the combined event table into the training-ready master dataset.
 
-Each raw CSV must follow the collection template columns. This script:
-  1. Concatenates all hotel files
-  2. Standardizes text categories (strips whitespace, fixes casing)
-  3. Validates values and drops/flags impossible rows
-  4. Writes data/processed/master.csv
+Input : data/combined/all_events.csv   (one row per event; see docs/dataset.md)
+Output: data/processed/master.csv      one clean row per event
+        reports/qc_report.md           what was fixed or removed, and why
 
-Run:  python src/preprocess.py
+Steps
+  1. Text columns: trim, lower-case, map aliases (day -> lunch, night -> dinner); unknown event
+     types become "other".
+  2. Types: dates and numbers parsed; rows with no date or no guest count are dropped; duplicate
+     event_ids are dropped (first one kept).
+  3. Quantities: negative amounts are blanked; a leftover larger than what was prepared is capped
+     at the prepared amount.
+  4. Outliers: per category, an eaten-per-guest value far outside the normal range (beyond 3 x IQR
+     from the quartiles) is blanked for that category only. This catches partly-read workbooks
+     where only a few dishes were picked up. The rest of the event is kept.
+  5. data_quality (R/M/E) is kept unchanged.
+
+Run:  python src/preprocess.py [--data data/combined/all_events.csv]
 """
+import argparse
 from pathlib import Path
+
 import pandas as pd
 
-RAW_DIR = Path("data/raw")
-OUT_PATH = Path("data/processed/master.csv")
-
-VALID_EVENT_TYPES = ["Wedding", "Homecoming", "Birthday", "Corporate",
-                     "Conference", "Religious/Almsgiving", "Other"]
-VALID_STYLES = ["Buffet", "Plated"]
-VALID_PACKAGES = ["Standard", "Silver", "Gold", "Custom"]
-
-QTY_COLS = ["rice_starch_prepared_kg", "rice_starch_leftover_kg",
-            "mains_prepared_kg", "mains_leftover_kg",
-            "veg_sides_prepared_kg", "veg_sides_leftover_kg",
-            "desserts_prepared_kg", "desserts_leftover_kg",
-            "beverages_prepared_l", "beverages_leftover_l"]
+CATEGORIES = ["rice_starch", "mains", "veg_sides", "desserts", "beverages"]
+EVENT_TYPES = ["wedding", "corporate", "birthday", "other"]
+MEAL_ALIASES = {"lunch": "lunch", "day": "lunch", "dinner": "dinner", "night": "dinner"}
+NUMERIC = (["month", "is_weekend", "road_km", "rate_lkr", "n_dishes_total", "guests_expected", "guests_actual"]
+           + [f"{k}_{c}" for c in CATEGORIES for k in ("prepared", "leftover", "ran_short")])
+IQR_K = 3.0
 
 
-def clean_category(series: pd.Series, valid: list[str]) -> pd.Series:
-    """Trim whitespace, title-case, and map anything unrecognized to 'Other'."""
-    s = series.astype(str).str.strip()
-    lookup = {v.lower(): v for v in valid}
-    return s.str.lower().map(lookup).fillna("Other" if "Other" in valid else valid[0])
+def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    issues = []
+    df = df.copy()
+    n0 = len(df)
+
+    for col in ("event_type", "meal_type", "data_quality", "hotel_id"):
+        df[col] = df[col].astype(str).str.strip()
+    df["event_type"] = df["event_type"].str.lower()
+    unknown = ~df["event_type"].isin(EVENT_TYPES)
+    if unknown.any():
+        issues.append(f"{int(unknown.sum())} rows: unknown event_type set to 'other'")
+    df.loc[unknown, "event_type"] = "other"
+    df["meal_type"] = df["meal_type"].str.lower().map(MEAL_ALIASES)
+    df["data_quality"] = df["data_quality"].str.upper()
+
+    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
+    for col in NUMERIC:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    bad = df["event_date"].isna() | ~(df["guests_expected"] > 0) | ~(df["guests_actual"] > 0) | df["meal_type"].isna()
+    if bad.any():
+        issues.append(f"{int(bad.sum())} rows dropped: missing date, meal type or guest count")
+    df = df[~bad]
+    dup = df["event_id"].duplicated()
+    if dup.any():
+        issues.append(f"{int(dup.sum())} rows dropped: duplicate event_id")
+    df = df[~dup].copy()
+
+    df["month"] = df["event_date"].dt.month
+    df["is_weekend"] = (df["event_date"].dt.dayofweek >= 5).astype(int)
+
+    for c in CATEGORIES:
+        prep, left = f"prepared_{c}", f"leftover_{c}"
+        neg = (df[prep] < 0) | (df[left] < 0)
+        if neg.any():
+            issues.append(f"{int(neg.sum())} rows: negative {c} amount blanked")
+        df.loc[neg, [prep, left]] = pd.NA
+        excess = df[left] > df[prep]
+        if excess.any():
+            issues.append(f"{int(excess.sum())} rows: leftover_{c} > prepared_{c}, capped at prepared")
+        df.loc[excess, left] = df.loc[excess, prep]
+
+        rate = (df[prep] - df[left]) / df["guests_actual"]
+        q1, q3 = rate.quantile([0.25, 0.75])
+        lo, hi = q1 - IQR_K * (q3 - q1), q3 + IQR_K * (q3 - q1)
+        out = rate.notna() & ((rate < lo) | (rate > hi))
+        if out.any():
+            issues.append(f"{int(out.sum())} rows: {c} eaten-per-guest outside [{lo:.3f}, {hi:.3f}] "
+                          f"blanked for {c} only")
+        df.loc[out, [prep, left, f"ran_short_{c}"]] = pd.NA
+
+    df["event_date"] = df["event_date"].dt.strftime("%Y-%m-%d")
+    for c in CATEGORIES:
+        df[f"ran_short_{c}"] = df[f"ran_short_{c}"].astype("Int64")
+    issues.insert(0, f"{len(df)} of {n0} rows kept")
+    return df.reset_index(drop=True), issues
 
 
 def main() -> None:
-    files = sorted(RAW_DIR.glob("*.csv"))
-    if not files:
-        raise SystemExit(f"No CSV files found in {RAW_DIR}/ - export the template sheets there first.")
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--data", default="data/combined/all_events.csv")
+    p.add_argument("--out", default="data/processed/master.csv")
+    p.add_argument("--report", default="reports/qc_report.md")
+    a = p.parse_args()
 
-    frames = [pd.read_csv(f) for f in files]
-    df = pd.concat(frames, ignore_index=True)
-    n0 = len(df)
-    print(f"Loaded {n0} rows from {len(files)} file(s): {[f.name for f in files]}")
+    df, issues = clean(pd.read_csv(a.data))
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(a.out, index=False)
 
-    # --- Standardize categories ---
-    df["event_type"] = clean_category(df["event_type"], VALID_EVENT_TYPES)
-    df["service_style"] = clean_category(df["service_style"], VALID_STYLES)
-    df["package_tier"] = clean_category(df["package_tier"], VALID_PACKAGES)
+    usable = {c: int(df[f"prepared_{c}"].notna().sum()) for c in CATEGORIES}
+    lines = ["# Data quality report", "", f"Input: `{a.data}` -> output: `{a.out}`", ""]
+    lines += [f"- {i}" for i in issues]
+    lines += ["", "| | count |", "|---|---|"]
+    lines += [f"| hotel = {k} | {v} |" for k, v in df["hotel_id"].value_counts().sort_index().items()]
+    lines += [f"| data_quality = {k} | {v} |" for k, v in df["data_quality"].value_counts().sort_index().items()]
+    lines += [f"| events with a {c} target | {v} |" for c, v in usable.items()]
+    Path(a.report).parent.mkdir(parents=True, exist_ok=True)
+    Path(a.report).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    # --- Types & validation ---
-    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
-    for col in ["guests_booked", "guests_actual"] + QTY_COLS:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    issues = []
-    mask_ok = pd.Series(True, index=df.index)
-
-    bad_date = df["event_date"].isna()
-    bad_guests = (df["guests_booked"] <= 0) | df["guests_booked"].isna()
-    mask_ok &= ~(bad_date | bad_guests)
-    if bad_date.any():
-        issues.append(f"{bad_date.sum()} rows dropped: unparseable event_date")
-    if bad_guests.any():
-        issues.append(f"{bad_guests.sum()} rows dropped: missing/invalid guests_booked")
-
-    # guests_actual missing -> assume booked (flag data_quality down to M)
-    missing_actual = df["guests_actual"].isna() & mask_ok
-    df.loc[missing_actual, "guests_actual"] = df.loc[missing_actual, "guests_booked"]
-    df.loc[missing_actual, "data_quality"] = "M"
-    if missing_actual.any():
-        issues.append(f"{missing_actual.sum()} rows: guests_actual missing, assumed = booked (flagged M)")
-
-    # Leftover cannot exceed prepared; negative quantities invalid
-    for prep, left in zip(QTY_COLS[0::2], QTY_COLS[1::2]):
-        neg = (df[prep] < 0) | (df[left] < 0)
-        df.loc[neg, [prep, left]] = pd.NA
-        excess = df[left] > df[prep]
-        df.loc[excess, left] = df.loc[excess, prep]
-        if excess.any():
-            issues.append(f"{excess.sum()} rows: {left} > {prep}, capped at prepared")
-
-    df = df[mask_ok].reset_index(drop=True)
-
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(OUT_PATH, index=False)
-
-    print(f"\nWrote {OUT_PATH} ({len(df)}/{n0} rows kept)")
-    if issues:
-        print("Data quality report:")
-        for i in issues:
-            print(f"  - {i}")
-    print("\nRows by hotel:", df["hotel_id"].value_counts().to_dict())
+    print(f"Wrote {a.out} ({len(df)} rows) and {a.report}")
+    for i in issues:
+        print(f"  - {i}")
     print("Rows by data_quality:", df["data_quality"].value_counts().to_dict())
+    print("Events with a target per category:", usable)
 
 
 if __name__ == "__main__":

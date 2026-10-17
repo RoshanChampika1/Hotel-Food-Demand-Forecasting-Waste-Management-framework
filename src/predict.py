@@ -1,4 +1,5 @@
 
+import json
 import sys
 from pathlib import Path
 
@@ -12,10 +13,19 @@ CATEGORIES = ["rice_starch", "mains", "veg_sides", "desserts", "beverages"]
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 
-EXPECTED_MODEL_NAME = "gradient_boosting"
+# Defaults if models/winners.json is missing. train.py writes the winners of its 5-fold comparison
+# there: the lowest-error model per category for the expected quantity, quantile GBM P85 for safe.
+EXPECTED_MODEL_NAME = "linear_regression"
 SAFE_MODEL_NAME = "quantile_gbm_p85"
 
 _model_cache = {}
+
+
+def winners() -> dict:
+    path = MODELS_DIR / "winners.json"
+    chosen = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    return {c: {"expected": chosen.get(c, {}).get("expected", EXPECTED_MODEL_NAME),
+                "safe": chosen.get(c, {}).get("safe", SAFE_MODEL_NAME)} for c in CATEGORIES}
 
 
 def _load_model(category: str, model_name: str):
@@ -29,24 +39,25 @@ def _load_model(category: str, model_name: str):
     return _model_cache[key]
 
 
-def predict_event(event: dict) -> dict:
-
-    X = build_features(pd.DataFrame([event]))
-    guests_expected = float(event["guests_expected"])
-
-    results = {}
+def predict_batch(events: pd.DataFrame) -> pd.DataFrame:
+    """Expected and safe quantity per category for many events at once (one row per event)."""
+    X = build_features(events)
+    guests = events["guests_expected"].astype(float).to_numpy()
+    out = pd.DataFrame(index=events.index)
+    chosen = winners()
     for cat in CATEGORIES:
-        expected_rate = _load_model(cat, EXPECTED_MODEL_NAME).predict(X)[0]
-        safe_rate = _load_model(cat, SAFE_MODEL_NAME).predict(X)[0]
+        expected = _load_model(cat, chosen[cat]["expected"]).predict(X).clip(min=0) * guests
+        safe = _load_model(cat, chosen[cat]["safe"]).predict(X).clip(min=0) * guests
+        # two separately trained models can cross for unusual inputs; safe must never be below expected
+        out[f"{cat}_expected"] = expected.round(2)
+        out[f"{cat}_safe"] = pd.Series(safe, index=events.index).combine(
+            pd.Series(expected, index=events.index), max).round(2)
+    return out
 
-        expected_qty = max(expected_rate, 0.0) * guests_expected
-        safe_qty = max(safe_rate, 0.0) * guests_expected
 
-
-        safe_qty = max(safe_qty, expected_qty)
-
-        results[cat] = {"expected": round(expected_qty, 2), "safe": round(safe_qty, 2)}
-    return results
+def predict_event(event: dict) -> dict:
+    row = predict_batch(pd.DataFrame([event])).iloc[0]
+    return {cat: {"expected": row[f"{cat}_expected"], "safe": row[f"{cat}_safe"]} for cat in CATEGORIES}
 
 
 if __name__ == "__main__":

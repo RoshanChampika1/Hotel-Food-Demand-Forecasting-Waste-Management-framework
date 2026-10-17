@@ -60,35 +60,26 @@ real-world cost more than a model chosen purely to minimize average
 error**, because average error treats a kg of waste and a kg of shortage
 as equally bad, when they are not.
 
-Early validation on synthetic data (pipeline-testing only, see
-[Current Status](#current-status)) supports this: evaluated under an
-illustrative asymmetric cost function (shortage weighted more heavily than
-surplus), the 85th-percentile model came out cheapest in every food
-category tested — despite having _worse_ average error than the point-estimate
-model in every category. That is the expected signature of this approach
-working as intended, and it is the result this project needs to confirm
-on real hotel data.
+On the combined dataset (554 events, 5-fold cross-validation, see
+[results/category_models/RESULTS.md](results/category_models/RESULTS.md)), the 85th-percentile model
+has the lowest shortage-weighted cost in every food category, despite having a _worse_ average error
+than the point-estimate models. That is the expected signature of this approach working as intended.
 
 ## Current Status
 
-The ML pipeline is complete and validated end-to-end on **synthetic data**
-generated to match the real data schema. Real data collection (own hotel +
-partner hotels) is in progress; results above are pipeline validation only
-and are not being presented as research findings until run on real data.
 
-| Component                                                            | Status                                                                                                 |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Synthetic data generator                                             | Done                                                                                                   |
-| Booking-time feature engineering                                     | Done                                                                                                   |
-| Model training (baseline, linear, GBM, quantile GBM, random forest)  | Done                                                                                                   |
-| Cross-validated evaluation, calibration check, cost-based comparison | Done                                                                                                   |
-| Single-event prediction                                              | Done                                                                                                   |
-| Streamlit input/output interface                                     | Done                                                                                                   |
-| Real-data preprocessing (raw hotel CSVs → training-ready data)       | Pending — schema is finalized (see data collection template below); build starts once real CSVs arrive |
-| Real hotel data collection                                           | Done for own hotel: 69 event orders (Aug 2025–Oct 2026), 54 with actual guest counts                    |
-| Real-data attendance analysis (`src/event_orders/`, `src/attendance_models.py`) | Done: see [results/attendance/RESULTS.md](results/attendance/RESULTS.md)                    |
+
+| Component                                                            | Status |
+| -------------------------------------------------------------------- | ------ |
+| Combined dataset (`data/combined/all_events.csv` + `.xlsx`)           | Done   |
+| Preprocessing + QC report (`src/preprocess.py`)                      | Done   |
+| Booking-time feature engineering                                     | Done   |
+| Model training + winner selection (`src/train.py`)                   | Done   |
+| Full evaluation: error metrics, confusion matrices, F1, ROC/PR, learning curves (`src/evaluate.py`) | Done |
+| Single-event and batch prediction                                    | Done   |
+| Streamlit app                                                        | Done   |
+| Real-data attendance analysis (`src/event_orders/`)                  | Done: see [results/attendance/RESULTS.md](results/attendance/RESULTS.md) (analysis script no longer in the repo) |
 | Event Order System app (`src/event_system/`, `app/streamlit_app.py`)  | Done: Party Menu → safe guest count → Stock Balance → printable PDFs/Excel ([docs/event_order_system.md](docs/event_order_system.md)) |
-| Thesis write-up                                                      | Not started                                                                                            |
 
 ## Methodology
 
@@ -126,19 +117,19 @@ size and project scope do not justify the added complexity.
 ## Repository Structure
 
 ```
-src/generate_dummy_data.py   synthetic data generator (development only)
 src/features.py              shared feature engineering (booking-time only),
                               imported by both training and prediction
-src/preprocess.py            [pending] merges data/raw/*.csv (one per hotel)
-                              into data/processed/master.csv
-src/train.py                 trains all models for all categories, saves
-                              models/*.joblib, prints evaluation report
+src/preprocess.py            cleans data/combined/all_events.csv into data/processed/master.csv + reports/qc_report.md
+src/train.py                 trains all models for all categories, picks the winners,
+                              saves models/*.joblib + models/winners.json
+src/evaluate.py              metrics, confusion matrices and curves ->
+                              results/category_models/
 src/predict.py                predict_event(dict) — single-event inference,
                               used by the app
 app/streamlit_app.py         input form -> expected + safe quantities
 docs/food_demand_dataset_template.xlsx   data collection template used by
                               partner hotels
-data/dummy_dataset.csv       synthetic dataset (safe to share)
+data/combined/all_events.csv the combined event table (pipeline input; also .xlsx)
 data/raw/, data/processed/   real hotel data (gitignored — not in this repo,
                               confidential)
 models/                      trained model artifacts (gitignored, regenerated
@@ -159,30 +150,24 @@ pip install -r requirements.txt
 ## Running the Pipeline
 
 ```bash
-# 1. Generate synthetic data (development only — never used as a research result)
-python src/generate_dummy_data.py
+# Input: data/combined/all_events.csv (one row per event)
 
-# 2. Train all 5 categories x 5 models (defaults to data/dummy_dataset.csv)
+# 1. Clean it (writes data/processed/master.csv and reports/qc_report.md)
+python src/preprocess.py
+
+# 2. Train all 5 categories x 5 models and pick the winners
 python src/train.py
 
-# 3. Single-event inference sanity check
-python src/predict.py
+# 3. Evaluation: metrics, confusion matrices, ROC/PR and learning curves
+python src/evaluate.py
 
-# 4. Run the interactive app
+# 4. Single-event inference sanity check, then the app
+python src/predict.py
 streamlit run app/streamlit_app.py
 ```
 
-Once real hotel data is available: partner hotels fill in
-`docs/food_demand_dataset_template.xlsx` and export it as CSV into
-`data/raw/` (one file per hotel), then:
-
-```bash
-python src/preprocess.py                                # merges & cleans raw CSVs
-python src/train.py --data data/processed/master.csv    # retrains on real data
-```
-
-The app picks up newly trained models automatically — no code changes
-needed.
+The app picks up newly trained models and winners automatically — no code changes needed.
+See [docs/dataset.md](docs/dataset.md) for the columns of the combined table.
 
 ## Real-Data Analysis (October 2026)
 
@@ -193,8 +178,10 @@ Real data came from the hotel's own **event-order workbooks** (menu, booked gues
 # town distance file in data/inputs/town_distance.csv (git-ignored), then:
 python src/event_orders/extract_events.py data/raw data/processed
 python src/event_orders/build_dataset.py data/raw data/processed
-python src/attendance_models.py data/processed/events_clean.csv results/attendance
 ```
+
+The attendance results in `results/attendance/` come from an earlier analysis script that is no
+longer in the repository; the committed CSVs and charts are kept as they were.
 
 - Leave-one-event-out comparison of the chef's rule, average and median ratio, linear and Ridge regression, random forest, gradient boosting, and P85 safe methods (quantile regression, conformal margin, quantile GBM)
 - A waste vs running-short trade-off curve, a train-on-past / test-on-future check, and a road-distance feature test
@@ -239,21 +226,20 @@ consistent with the project's deliberately simple, dependency-light scope.
 
 Real hotel data and any models trained on it are excluded from version
 control (`.gitignore`) and never leave the author's machine as part of
-this repository — only the synthetic dataset is shared publicly. Data
+this repository. Data
 quality is tracked explicitly per record (Recorded / Manual estimate /
 Eyeballed) so the reliability of the underlying data is never hidden
 behind a single aggregate metric.
 
 ## Limitations & Future Work
 
-- Results reported to date are pipeline-validation results on synthetic
-  data, not research findings; the pipeline needs to be re-run and its
-  conclusions re-checked once real hotel data is available.
+- Real events record one leftover estimate per event (split across categories) and no beverages;
+  more weighed, per-category records would sharpen the per-category models.
 - The illustrative cost ratio used to compare models (shortage vs.
   surplus cost per kg) is a placeholder pending a real estimate from the
   hotel.
 - The safe-quantity model's calibration (does the 85th-percentile
   prediction actually cover ~85% of outcomes?) needs re-validating on
   real data.
-- `src/preprocess.py` (merging real multi-hotel CSVs) is not yet built —
-  planned once real submissions start arriving.
+- Booking-time features explain little of per-guest consumption beyond the average; richer
+  booking features (menu size, package rate) are the natural next step.

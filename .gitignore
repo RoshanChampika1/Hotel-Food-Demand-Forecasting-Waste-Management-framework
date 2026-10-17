@@ -29,8 +29,14 @@ notes/
 !models/.gitkeep
 !reports/.gitkeep
 results/attendance/per_event_predictions.csv
+results/category_models/oof_predictions.csv
 
 # event-order system: hotel recipes/menus and saved orders stay private
 data/master/
 data/orders/
 models/*.json
+# event data built from the real events (see docs/dataset.md)
+
+data/combined/
+docs/
+

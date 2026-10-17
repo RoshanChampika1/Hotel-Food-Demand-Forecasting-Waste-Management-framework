@@ -2,7 +2,7 @@
 
 Data: **54 real events** (Aug 2025 to Oct 2026) with booked and actual guest counts.
 Test method: **leave-one-event-out**. Each event is predicted by a model trained on the other 53.
-Script: `src/attendance_models.py`. Numbers: `results/attendance/results_loeo.csv`. Charts: `results/attendance/fig1_attendance_ratio.png` and `fig2_tradeoff.png`.
+Script: `src/attendance_models.py` (no longer in the repository). Numbers: `results/attendance/results_loeo.csv`. Charts: `results/attendance/fig1_attendance_ratio.png` and `fig2_tradeoff.png`.
 
 ---
 

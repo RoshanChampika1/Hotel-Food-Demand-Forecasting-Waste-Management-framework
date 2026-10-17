@@ -50,11 +50,9 @@ These folders are git-ignored, so the hotel's data never goes to GitHub.
 ```bash
 python src/event_orders/extract_events.py data/raw data/processed
 python src/event_orders/build_dataset.py data/raw data/processed
-python src/attendance_models.py data/processed/events_clean.csv results/attendance
 ```
-- The first two commands take about 1 minute and build `data/processed/events_clean.csv` (54 usable events).
-- The last command takes **about 5–10 minutes**. It tests all 13 methods, event by event.
-- Results appear in `results/attendance/`: `results_loeo.csv`, `tradeoff.csv`, the two charts (`fig1_attendance_ratio.png`, `fig2_tradeoff.png`), and the explanation in `RESULTS.md`.
+- These take about 1 minute and build `data/processed/events_clean.csv` (54 usable events).
+- The attendance results already in `results/attendance/` (`results_loeo.csv`, `tradeoff.csv`, the two charts and `RESULTS.md`) came from an earlier analysis script that is no longer in the repository.
 
 ## 6. Run the Event Order System (the app)
 Do these two steps once, and again whenever you add new event-order Excel files:
@@ -79,7 +77,7 @@ How to use it:
 5. **Kitchen recipes tab:** the ingredients for each dish.
 6. **Print & save tab:** download the Party Menu PDF (kitchen notice board), the Stock Balance PDF (for the chef), the kitchen recipes PDF, or all sheets in one Excel file. **Save order** keeps the order in `data/orders/`.
 
-The old category demo (dummy data) still runs with `streamlit run app/category_forecast_demo.py`.
+The app has two pages in the sidebar: **Event Order** (above) and **Food Forecast** (expected and safe kg per food category, for one event or an uploaded CSV/Excel list, with analysis and Excel/CSV export).
 
 ## Common problems
 | Problem | Fix |
