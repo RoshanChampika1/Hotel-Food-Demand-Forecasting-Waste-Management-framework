@@ -1,5 +1,15 @@
 
+"""Train the 5 food-category models and pick the winners.
+
+Per category (rice_starch, mains, veg_sides, desserts, beverages) the target is food eaten per guest.
+Five models are compared with 5-fold cross-validation (every event is predicted by a model that never
+saw it). The expected-quantity winner is the model with the lowest error in kg; the safe quantity is
+always the quantile GBM at P85. Winners go to models/winners.json, which src/predict.py reads.
+
+Usage: python src/train.py [--data data/processed/master.csv]
+"""
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -8,30 +18,23 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 
 sys.path.insert(0, str(Path(__file__).parent))
-from features import build_features, FEATURE_COLUMNS  
+from baseline_model import BaselineMeanModel  # noqa: E402
+from features import build_features, FEATURE_COLUMNS  # noqa: E402
 
 CATEGORIES = ["rice_starch", "mains", "veg_sides", "desserts", "beverages"]
 QUANTILE = 0.85
 RANDOM_STATE = 42
 N_FOLDS = 5
 MODELS_DIR = Path("models")
+RESULTS_DIR = Path("results/category_models")
+EXPECTED_CANDIDATES = ["baseline", "linear_regression", "random_forest", "gradient_boosting"]
+SAFE_MODEL = "quantile_gbm_p85"
 WASTE_COST_PER_KG = 1.0
 SHORTAGE_COST_PER_KG = 3.0
-
-
-class BaselineMeanModel:
-    """Chef's-rule baseline: the mean per-guest rate from training, ignoring all features."""
-
-    def fit(self, X, y):
-        self.mean_ = float(np.mean(y))
-        return self
-
-    def predict(self, X):
-        return np.full(len(X), self.mean_)
 
 
 def build_model_registry():
@@ -95,72 +98,77 @@ def total_cost(y_true_rate, pred_rate, guests_actual):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data", default="data/dummy_dataset.csv")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--data", default="data/processed/master.csv")
     args = parser.parse_args()
 
     df = pd.read_csv(args.data)
-    if Path(args.data).name == "dummy_dataset.csv":
-        print("NOTE: training on SYNTHETIC data — metrics below are pipeline")
-        print("sanity checks only, not research results.\n")
-
     before = len(df)
     df = df[df["guests_actual"] > 0].reset_index(drop=True)
     if len(df) < before:
         print(f"Dropped {before - len(df)} row(s) with guests_actual <= 0.\n")
 
-    X = build_features(df)
+    X_all = build_features(df)
     y_all = compute_targets(df)
-    guests_actual = df["guests_actual"].to_numpy()
+    guests_all = df["guests_actual"].to_numpy()
 
     MODELS_DIR.mkdir(exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    print(f"Training on {len(df)} events from {args.data}")
     print(f"{N_FOLDS}-fold cross-validation (each row's prediction is from a model that never trained on it)\n")
-    print(f"{'category':<12} {'model':<18} {'MAE/guest':>10} {'MAE(qty)':>10} {'cost':>10}")
-    print("-" * 64)
+    print(f"{'category':<12} {'model':<18} {'n':>4} {'MAE/guest':>10} {'MAE(kg)':>9} {'RMSE(kg)':>9} {'R2':>6} {'cost':>9}")
+    print("-" * 84)
 
-    oof_by_cat = {}
-    coverage_report = {}
-    cost_report = {cat: {} for cat in CATEGORIES}
-
+    rows, oof_rows, winners = [], [], {}
     for cat in CATEGORIES:
-        y = y_all[cat]
+        mask = y_all[cat].notna().to_numpy()
+        X, y, guests = X_all[mask].reset_index(drop=True), y_all[cat][mask].reset_index(drop=True), guests_all[mask]
         oof = cross_val_predict_all(X, y)
-        oof_by_cat[cat] = oof
-
+        yt = y.to_numpy()
         for name, pred in oof.items():
-            mae_rate, mae_qty = mae_rate_and_qty(y.to_numpy(), pred, guests_actual)
-            c = total_cost(y.to_numpy(), pred, guests_actual)
-            cost_report[cat][name] = c
-            print(f"{cat:<12} {name:<18} {mae_rate:>10.4f} {mae_qty:>10.3f} {c:>10.1f}")
+            mae_rate, mae_qty = mae_rate_and_qty(yt, pred, guests)
+            rows.append({
+                "category": cat, "model": name, "n_events": int(mask.sum()),
+                "mae_per_guest": mae_rate, "mae_kg": mae_qty,
+                "rmse_kg": float(np.sqrt(mean_squared_error(yt * guests, pred * guests))),
+                "r2": r2_score(yt, pred), "cost": total_cost(yt, pred, guests),
+                "coverage": float((yt <= pred).mean()),
+            })
+            r = rows[-1]
+            print(f"{cat:<12} {name:<18} {r['n_events']:>4} {mae_rate:>10.4f} {mae_qty:>9.3f} "
+                  f"{r['rmse_kg']:>9.3f} {r['r2']:>6.3f} {r['cost']:>9.1f}")
+        cat_rows = [r for r in rows if r["category"] == cat]
+        expected = min((r for r in cat_rows if r["model"] in EXPECTED_CANDIDATES), key=lambda r: r["mae_kg"])["model"]
+        winners[cat] = {"expected": expected, "safe": SAFE_MODEL}
+        print(f"  -> winner for {cat}: expected = {expected}, safe = {SAFE_MODEL}\n")
 
-        best_name = min((n for n in oof if n != "baseline"), key=lambda n: cost_report[cat][n])
-        print(f"  -> lowest-cost non-baseline model for {cat}: {best_name}\n")
+        idx = df.index[mask]
+        for name, pred in oof.items():
+            oof_rows.append(pd.DataFrame({"event_id": df.loc[idx, "event_id"].to_numpy(), "category": cat,
+                                          "model": name, "y_true": yt, "y_pred": pred, "guests_actual": guests}))
 
-        coverage_report[cat] = float((y.to_numpy() <= oof["quantile_gbm_p85"]).mean())
-
-      
         for name, model in build_model_registry().items():
             model.fit(X, y)
             joblib.dump(model, MODELS_DIR / f"{cat}__{name}.joblib")
 
-    print("P85 calibration check (target: ~0.85 — fraction of actual outcomes at or below the safe prediction):")
-    for cat, coverage in coverage_report.items():
-        flag = "" if 0.75 <= coverage <= 0.95 else "  <-- off target"
-        print(f"  {cat:<12} coverage={coverage:.2f}{flag}")
+    comparison = pd.DataFrame(rows)
+    comparison.to_csv(RESULTS_DIR / "model_comparison.csv", index=False)
+    pd.concat(oof_rows, ignore_index=True).to_csv(RESULTS_DIR / "oof_predictions.csv", index=False)
+    (MODELS_DIR / "winners.json").write_text(json.dumps(winners, indent=2), encoding="utf-8")
+
+    print("P85 calibration check (target: ~0.85, share of events where the safe amount was enough):")
+    for r in comparison[comparison.model == SAFE_MODEL].itertuples():
+        flag = "" if 0.75 <= r.coverage <= 0.95 else "  <-- off target"
+        print(f"  {r.category:<12} coverage={r.coverage:.2f}{flag}")
     print()
 
-    print(
-        "Illustrative cost comparison (arbitrary units; shortage weighted "
-        f"{SHORTAGE_COST_PER_KG / WASTE_COST_PER_KG:.0f}x worse than surplus per kg — "
-        "NOT real hotel figures, replace once real costs are known):"
-    )
+    print(f"Cost comparison (shortage weighted {SHORTAGE_COST_PER_KG / WASTE_COST_PER_KG:.0f}x worse than surplus per kg):")
     for cat in CATEGORIES:
-        baseline_cost = cost_report[cat]["baseline"]
-        best_name = min((n for n in cost_report[cat] if n != "baseline"), key=lambda n: cost_report[cat][n])
-        best_cost = cost_report[cat][best_name]
-        savings_pct = 100 * (baseline_cost - best_cost) / baseline_cost if baseline_cost else 0.0
-        print(f"  {cat:<12} baseline={baseline_cost:>8.1f}  {best_name}={best_cost:>8.1f}  savings={savings_pct:>5.1f}%")
+        c = comparison[comparison.category == cat].set_index("model")["cost"]
+        best = c.drop("baseline").idxmin()
+        saving = 100 * (c["baseline"] - c[best]) / c["baseline"] if c["baseline"] else 0.0
+        print(f"  {cat:<12} baseline={c['baseline']:>8.1f}  {best}={c[best]:>8.1f}  savings={saving:>5.1f}%")
     print()
 
     print("Feature importance (gradient_boosting, top 5 per category):")
@@ -171,17 +179,17 @@ def main():
         print(f"  {cat:<12} {top5}")
     print()
 
-    if "data_quality" in df.columns:
-        r_mask = (df["data_quality"] == "R").to_numpy()
-        print(f"Records-only robustness check (data_quality == 'R', n={int(r_mask.sum())} of {len(df)} rows):")
-        if r_mask.sum() >= 10:
-            for cat in CATEGORIES:
-                y = y_all[cat].to_numpy()
-                pred = oof_by_cat[cat]["gradient_boosting"]
-                mae_rate, mae_qty = mae_rate_and_qty(y[r_mask], pred[r_mask], guests_actual[r_mask])
-                print(f"  {cat:<12} MAE/guest={mae_rate:.4f}  MAE(qty)={mae_qty:.3f}")
-        else:
-            print("  skipped: fewer than 10 'R' rows.")
+    oof = pd.concat(oof_rows, ignore_index=True).merge(df[["event_id", "data_quality"]], on="event_id")
+    for col, value in (("data_quality", "R"),):
+        sub = oof[(oof[col] == value) & (oof.model.isin(["baseline", "gradient_boosting"]))]
+        print(f"Robustness check: {col} == '{value}' only")
+        for (cat, name), g in sub.groupby(["category", "model"], sort=False):
+            if len(g) >= 10:
+                print(f"  {cat:<12} {name:<18} n={len(g):>3}  MAE(kg)="
+                      f"{mean_absolute_error(g.y_true * g.guests_actual, g.y_pred * g.guests_actual):.3f}")
+        print()
+
+    print(f"Winners written to {MODELS_DIR / 'winners.json'}; comparison in {RESULTS_DIR / 'model_comparison.csv'}")
 
 
 if __name__ == "__main__":

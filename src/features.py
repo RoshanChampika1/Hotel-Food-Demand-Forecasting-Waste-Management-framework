@@ -35,8 +35,9 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     out["guests_expected"] = df["guests_expected"].astype(float)
     out["is_weekend"] = (event_date.dt.dayofweek >= 5).astype(int)
 
-    event_type = pd.Categorical(df["event_type"], categories=EVENT_TYPES)
-    meal_type = pd.Categorical(df["meal_type"], categories=MEAL_TYPES)
+    # values outside the known lists become all-zero dummies (blank them first: newer pandas refuses them)
+    event_type = pd.Categorical(df["event_type"].where(df["event_type"].isin(EVENT_TYPES)), categories=EVENT_TYPES)
+    meal_type = pd.Categorical(df["meal_type"].where(df["meal_type"].isin(MEAL_TYPES)), categories=MEAL_TYPES)
     season = pd.Categorical(event_date.dt.month.map(_season), categories=SEASONS)
 
     out = pd.concat(
